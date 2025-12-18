@@ -65,6 +65,13 @@ python -m pipeline.pipeline --config config.yaml
 - Base Pool 默认流程：PySceneDetect 切分 → Flash Filter → Dover/AES 评分 → 阈值筛选。
 
 ## 模型与资源准备（发布/部署建议）
+- 如仓库未内置第三方源码，请在根目录拉取依赖：
+  ```bash
+  git clone https://github.com/QualityAssessment/DOVER.git DOVER
+  git clone https://github.com/haofeixu/unimatch.git unimatch
+  git clone https://github.com/LAION-AI/aesthetic-predictor.git aesthetic-predictor
+  ```
+  若已有外部路径，可在 `config.yaml` 的模型 `extra.repo_path`/`weight_path` 指向。
 - 随项目一起打包：`DOVER/`、`aesthetic-predictor/`、`unimatch/` 目录，避免用户额外克隆。
 - 权重：
   - DOVER：默认自动从 HF `teowu/DOVER` 下载到 `DOVER/pretrained_weights/DOVER.pth`；可提前放好或使用 DOVER-Mobile 替代。
