@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 
 import pandas as pd
+import time
 from tqdm import tqdm
 
 from .config import Config, load_config, parse_args
@@ -40,6 +41,7 @@ def ensure_dirs(cfg: Config) -> None:
 
 
 def process_shard(cfg: Config, shard: str, calibration_remaining: int | None = None) -> int:
+    t_start = time.time()
     state = load_state(cfg.state_dir, shard)
     calibration_cfg = cfg.calibration or {}
     calibration_enabled = calibration_cfg.get("enabled", False)
@@ -47,13 +49,30 @@ def process_shard(cfg: Config, shard: str, calibration_remaining: int | None = N
     calibration_output = calibration_cfg.get("output", None)
     calibration_counter = 0
     extras: dict[str, dict] = {}
+    summary = {
+        "shard": shard,
+        "files": 0,
+        "clips_after_scene": 0,
+        "clips_after_flash": 0,
+        "clips_after_ocr": 0,
+        "clips_scored": 0,
+        "time_download": 0.0,
+        "time_extract": 0.0,
+        "time_scene": 0.0,
+        "time_flash": 0.0,
+        "time_ocr": 0.0,
+        "time_score": 0.0,
+        "time_total": 0.0,
+    }
 
     archive_path = cfg.downloads_dir / shard
     if not state["downloaded"]:
+        t_dl = time.time()
         log.info("Downloading shard %s", shard)
         archive_path = download_shard(cfg.source_repo, shard, cfg.downloads_dir)
         state["downloaded"] = True
         save_state(cfg.state_dir, shard, state)
+        summary["time_download"] = time.time() - t_dl
     elif not archive_path.exists():
         # fallback to re-download if state says done but file missing
         log.info("Re-downloading missing shard file %s", shard)
@@ -61,19 +80,27 @@ def process_shard(cfg: Config, shard: str, calibration_remaining: int | None = N
 
     extract_path = cfg.extract_dir / Path(shard).stem
     if not state["extracted"]:
+        t_ex = time.time()
         log.info("Extracting %s to %s", archive_path.name, extract_path)
         extract_path = extract_shard(archive_path, cfg.extract_dir)
         state["extracted"] = True
         save_state(cfg.state_dir, shard, state)
+        summary["time_extract"] = time.time() - t_ex
 
     video_files = list_video_files(extract_path, exclude_dirs={"scenes"})
     if not video_files:
         log.warning("No video files found in shard %s", shard)
 
+    # 计算校准剩余上限
+    target_remaining = None
+    if calibration_enabled and calibration_sample_size > 0:
+        target_remaining = calibration_sample_size if calibration_remaining is None else calibration_remaining
+
     # 场景切分
     scenes_root = extract_path / "scenes"
     scene_clips: list[Path] = []
     split_failed: list[ScoreResult] = []
+    t_scene = time.time()
     for video in tqdm(video_files, desc="Scene detect", unit="video"):
         try:
             spans = detect_scenes(video, cfg.splitter)
@@ -89,6 +116,11 @@ def process_shard(cfg: Config, shard: str, calibration_remaining: int | None = N
         except Exception as exc:  # noqa: BLE001
             log.warning("Scene detection failed for %s: %s", video, exc)
             split_failed.append(ScoreResult(path=video, scores={}, keep=False, reason="split_failed"))
+        if target_remaining is not None and len(scene_clips) >= target_remaining:
+            break
+    summary["time_scene"] = time.time() - t_scene
+    summary["files"] = len(video_files)
+    summary["clips_after_scene"] = len(scene_clips)
 
     if not scene_clips:
         log.warning("No scene clips found in shard %s", shard)
@@ -96,6 +128,7 @@ def process_shard(cfg: Config, shard: str, calibration_remaining: int | None = N
     # 闪烁过滤
     flash_dropped: list[ScoreResult] = []
     filtered_clips: list[Path] = []
+    t_flash = time.time()
     if cfg.flash_filter.enabled and scene_clips:
         for clip in tqdm(scene_clips, desc="Flash filter", unit="clip"):
             if is_flashy(clip, cfg.flash_filter):
@@ -104,10 +137,13 @@ def process_shard(cfg: Config, shard: str, calibration_remaining: int | None = N
                 filtered_clips.append(clip)
     else:
         filtered_clips = scene_clips
+    summary["time_flash"] = time.time() - t_flash
+    summary["clips_after_flash"] = len(filtered_clips)
 
     # OCR 文字过滤
     ocr_dropped: list[ScoreResult] = []
     ocr_filtered: list[Path] = []
+    t_ocr = time.time()
     if cfg.ocr.enabled and filtered_clips:
         for clip in tqdm(filtered_clips, desc="OCR filter", unit="clip"):
             if has_text(clip, cfg.ocr):
@@ -116,6 +152,10 @@ def process_shard(cfg: Config, shard: str, calibration_remaining: int | None = N
                 ocr_filtered.append(clip)
     else:
         ocr_filtered = filtered_clips
+    if target_remaining is not None and len(ocr_filtered) > target_remaining:
+        ocr_filtered = ocr_filtered[:target_remaining]
+    summary["time_ocr"] = time.time() - t_ocr
+    summary["clips_after_ocr"] = len(ocr_filtered)
 
     try:
         scorers = build_scorers(cfg.models)
@@ -135,9 +175,12 @@ def process_shard(cfg: Config, shard: str, calibration_remaining: int | None = N
             limit = max(min(calibration_remaining, calibration_sample_size), 0)
         if len(ocr_filtered) > limit:
             ocr_filtered = ocr_filtered[:limit]
+    t_score = time.time()
     log.info("Scoring %d clips with %d models", len(ocr_filtered), len(scorers))
     scored_results = run_scorers(scorers, ocr_filtered) if ocr_filtered else []
     calibration_counter += len(ocr_filtered)
+    summary["time_score"] = time.time() - t_score
+    summary["clips_scored"] = len(ocr_filtered)
     results = split_failed + flash_dropped + ocr_dropped + scored_results
     state["scored"] = True
     save_state(cfg.state_dir, shard, state)
@@ -157,6 +200,8 @@ def process_shard(cfg: Config, shard: str, calibration_remaining: int | None = N
         save_state(cfg.state_dir, shard, state)
 
     cleanup_shard(cfg, shard)
+    summary["time_total"] = time.time() - t_start
+    _write_summary(cfg.output_dir / shard / "summary.json", summary)
     return calibration_counter
 
 
@@ -318,3 +363,12 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+def _write_summary(path: Path, data: dict) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Failed to write summary to %s: %s", path, exc)
