@@ -143,7 +143,9 @@ def process_shard(cfg: Config, shard: str, calibration_remaining: int | None = N
     save_state(cfg.state_dir, shard, state)
 
     log.info("Materializing results for %s", shard)
-    metadata_path = materialize_results(shard, results, cfg.output_dir, extras=extras)
+    metadata_path = materialize_results(
+        shard, results, cfg.output_dir, extras=extras, resize_720p=cfg.upload.resize_720p
+    )
     log.info("Metadata written to %s", metadata_path)
 
     if calibration_enabled:
@@ -171,6 +173,10 @@ def build_scene_windows(video: Path, spans, cfg: Config) -> dict:
         vr = decord.VideoReader(str(video))
         total_frames = len(vr)
         try:
+            w, h = vr[0].shape[1], vr[0].shape[0]
+        except Exception:
+            w, h = None, None
+        try:
             fps = float(vr.get_avg_fps())
         except Exception:
             fps = None
@@ -180,7 +186,7 @@ def build_scene_windows(video: Path, spans, cfg: Config) -> dict:
 
     if not fps or fps <= 0:
         # 无法获取有效 fps 时，跳过窗口计算
-        return {}
+        return {"fps": None, "total_frames": total_frames, "width": w, "height": h}
 
     if not spans:
         # 若未检测到场景，视为一个全片场景
@@ -219,6 +225,9 @@ def build_scene_windows(video: Path, spans, cfg: Config) -> dict:
     return {
         "fps": fps,
         "total_frames": total_frames,
+        "duration_sec": total_frames / fps if fps else None,
+        "width": w,
+        "height": h,
         "num_windows": len(windows),
         "windows": windows,
         "scenes": scenes_meta,

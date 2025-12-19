@@ -20,6 +20,7 @@ class ModelConfig:
 class UploadConfig:
     chunk_size_mb: int = 512
     max_workers: int = 3
+    resize_720p: bool = False
 
 
 @dataclass

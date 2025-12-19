@@ -64,13 +64,13 @@ python -m pipeline.pipeline --config config.yaml
 # 仅处理前 N 个分片： --limit-shards N
 # 仅本地处理不上传： --skip-upload
 
-校准模式（采样分布，不上传，输出 calibration_meta.parquet 并打印分位数）：
+校准模式（采样分布，不上传，输出 calibration_meta.parquet 并打印分位数；默认 quantiles=0.4/0.7，约等于 Top60%/Top30% 截断，可按需调整，如 0.5/0.8/0.9）：
 
 ```bash
 python -m pipeline.pipeline --config config.yaml --calibration --sample-size 10000 --skip-upload
 ```
 
-校准默认分位数为 0.4 / 0.7，可用 `--calibration-quantiles 0.4,0.7,0.9` 调整；输出路径可用 `--calibration-output /path/to/calibration_meta.parquet` 指定。
+可用 `--calibration-quantiles 0.4,0.7,0.9` 自定义分位；输出路径可用 `--calibration-output /path/to/calibration_meta.parquet` 指定。
 ```
 
 ## 配置要点
@@ -83,6 +83,7 @@ python -m pipeline.pipeline --config config.yaml --calibration --sample-size 100
 - `flash_filter`：闪烁过滤（迪厅灯光等），默认开启，可调节亮度跳变阈值与采样步长。
 - `models`：模型清单（如 `dover` / `laion_aes`）；`kind` 区分实现，`threshold` 用于筛选，`device` 绑定 GPU。可通过 `extra` 字段指定权重路径、采样策略等。
 - `upload`：HF 上传分块大小和并发。
+- `upload.resize_720p`：若为 true，保留视频将转码为 720p（ffmpeg libx264, preset=veryfast, crf=23），否则硬链/拷贝原视频。
 - `calibration`（可选）：`enabled`、`sample_size`、`output`、`quantiles` 用于采样评分并输出分布，帮助设定阈值；开启时默认不上传，可通过命令行 `--calibration`/`--sample-size`/`--calibration-output`/`--calibration-quantiles` 覆盖。
 
 ## 模型集成（Base Pool 已接入）
@@ -126,7 +127,7 @@ python -m pipeline.pipeline --config config.yaml --calibration --sample-size 100
 - 元数据写入 `workdir/output/{shard}/metadata.jsonl`，包含：
   - `source_path`/`output_path`、文件大小
   - `scores`、`keep`、`reason`（含 split_failed/flash/ocr_text/scoring_error/score_below_threshold 等）
-  - 场景与虚拟切片信息（当 cut=false 且 decord 可用）：`fps`、`total_frames`、`num_windows`、`windows`（帧范围列表）、`scenes`（场景起止帧及窗口数）
+  - 场景与虚拟切片信息（当 cut=false 且 decord 可用）：`fps`、`total_frames`、`duration_sec`、`width`、`height`、`num_windows`、`windows`（帧范围列表）、`scenes`（场景起止帧及窗口数）
 - 上传时将整个 `output/{shard}` 目录作为子目录推送到目标 HF 数据集，支持断点重试。
 
 ## 打包与部署
