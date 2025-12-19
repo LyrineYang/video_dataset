@@ -28,6 +28,9 @@ class SplitterConfig:
     threshold: float = 27.0
     min_scene_len: int = 16
     remove_source_after_split: bool = False
+    cut: bool = False  # 是否物理切割场景
+    window_len_frames: int = 121  # 虚拟切片长度（帧）
+    window_stride_frames: int = 60  # 虚拟切片步长（帧）
 
 
 @dataclass
@@ -65,6 +68,7 @@ class Config:
     flash_filter: FlashFilterConfig
     ocr: OCRConfig
     ffmpeg: FFmpegConfig
+    calibration: dict[str, Any] = field(default_factory=dict)
     limit_shards: int | None = None
     skip_upload: bool = False
 
@@ -98,6 +102,29 @@ def parse_args() -> argparse.Namespace:
         "--skip-upload",
         action="store_true",
         help="Process without uploading to HF",
+    )
+    parser.add_argument(
+        "--calibration",
+        action="store_true",
+        help="Enable calibration mode (no upload, sample clips for score distribution)",
+    )
+    parser.add_argument(
+        "--sample-size",
+        type=int,
+        default=None,
+        help="Calibration sample size (number of clips to score)",
+    )
+    parser.add_argument(
+        "--calibration-output",
+        type=str,
+        default=None,
+        help="Output path for calibration parquet (optional)",
+    )
+    parser.add_argument(
+        "--calibration-quantiles",
+        type=str,
+        default=None,
+        help="Comma separated quantiles for calibration report, e.g. 0.4,0.7",
     )
     return parser.parse_args()
 
@@ -133,6 +160,7 @@ def load_config(path: Path, limit_shards: int | None = None, skip_upload: bool =
         flash_filter=FlashFilterConfig(**raw.get("flash_filter", {})),
         ocr=OCRConfig(**raw.get("ocr", {})),
         ffmpeg=FFmpegConfig(**raw.get("ffmpeg", {})),
+        calibration=raw.get("calibration", {}),
         limit_shards=limit_shards,
         skip_upload=skip_upload,
     )

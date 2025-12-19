@@ -7,12 +7,15 @@ shards:
   - HQ-video-data-00001.zip
   - HQ-video-data-00002.zip
 
-# 场景切分配置（Base Pool 升级为 PySceneDetect）
+# 场景切分配置
 splitter:
   kind: pyscenedetect
   threshold: 27.0       # AdaptiveDetector 阈值
   min_scene_len: 16     # 帧数，约 0.5s（30fps 场景）
   remove_source_after_split: false  # 若磁盘紧张可设为 true（会删除原视频，仅保留切分片段）
+  cut: false            # 默认不物理切割，保留原视频
+  window_len_frames: 121
+  window_stride_frames: 60
 
 # 闪烁过滤（Flash Filter）
 flash_filter:
@@ -21,10 +24,17 @@ flash_filter:
   max_flash_ratio: 0.2     # 超过比例则视为闪烁
   sample_stride: 5         # 采样帧间隔
 
+# 阈值校准（可选）：抽样若干片段，仅落盘分布不上传
+calibration:
+  enabled: false            # 开启校准模式：不会上传，仅保存分布
+  sample_size: 10000        # 抽样评分的片段数量上限
+  output: calibration_meta.parquet  # 分布输出路径
+  quantiles: [0.4, 0.7]     # 计算的分位点
+
 # OCR 文字过滤（使用 PaddleOCR 检测文字占比，超过阈值丢弃）
 ocr:
   enabled: false
-  text_area_threshold: 0.02   # 文字面积占帧面积的比例阈值
+  text_area_threshold: 0.01   # 文字面积占帧面积的比例阈值
   sample_stride: 10           # 每隔多少帧采样一次
   lang: ch                    # OCR 语言，常用 ch/en
 
@@ -38,7 +48,7 @@ models:
   # Dover 示例，需在 models.py 中补全加载/推理实现
   - name: dover
     kind: dover
-    threshold: 0.7
+    threshold: 0.3
     device: cuda:0
     batch_size: 8
     # Dover 额外参数（可选）
@@ -50,7 +60,7 @@ models:
   # 可选：LAION-AES（如需在 Base 阶段加入美学得分，需补全实现）
   - name: aes
     kind: laion_aes
-    threshold: 0.25
+    threshold: 0.525
     device: cuda:1
     batch_size: 32
     # AES 额外参数（可选）

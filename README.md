@@ -6,15 +6,23 @@
 - 下载/解压：从 `source_repo` 拉取 `shards` 列表中的压缩包到 `workdir/downloads/`，安全解压到 `workdir/extract/{shard}/`。
 - 场景切分：PySceneDetect `AdaptiveDetector`，`threshold`/`min_scene_len` 控制敏感度；片段写入 `extract/{shard}/scenes/`，可选删除原视频。
 - 闪烁过滤：亮度跳变检测（`brightness_delta`、`max_flash_ratio`、`sample_stride`），判定闪烁的片段标记 `reason=flash`，不保留。
-- 模型打分：按 `models` 列表加载 scorer，对片段打分：
-  - `dover`：视频质量（技术+美学）得分，默认 0~1，阈值筛选。
+- 模型打分：按 `models` 列表加载 scorer，对片段打分并共同筛选（异常标记 `scoring_error`，所有模型分数都达标才 `keep=True`）：
+  - `dover`：视频质量（技术+美学）得分，默认 0~1。
   - `laion_aes`：CLIP+线性头美学得分，均匀采样 `num_frames` 帧取均值。
   - `unimatch_flow`：光流幅值均值，代表运动量，可过滤 PPT/静态内容。
   - `dummy`：恒 1.0，用于通路验证。
- 评分异常标记 `scoring_error`，否则逐模型与各自 `threshold` 比较；全部达标才 `keep=True`。
-- 输出与上传：保留片段硬链/拷贝到 `workdir/output/{shard}/videos/`，元数据写 `metadata.jsonl`（source/output 路径、大小、scores、keep、reason）；未加 `--skip-upload` 时，将 `output/{shard}` 上传到 `target_repo`。当前未包含 OCR/字幕过滤，如需可在 `pipeline/models.py` 扩展自定义 scorer。
+- 输出与上传：保留片段硬链/拷贝到 `workdir/output/{shard}/videos/`，元数据写 `metadata.jsonl`（source/output 路径、大小、scores、keep、reason）；未加 `--skip-upload` 时，将 `output/{shard}` 上传到 `target_repo`。OCR/字幕过滤可通过 `config.yaml` 中的 `ocr` 开关启用。
 
 ## 快速开始（统一环境流程）
+### 获取代码
+```bash
+git clone <本仓库地址>
+cd world_model
+# 如未内置第三方源码，可在根目录拉取依赖
+git clone https://github.com/QualityAssessment/DOVER.git DOVER
+git clone https://github.com/haofeixu/unimatch.git unimatch
+git clone https://github.com/LAION-AI/aesthetic-predictor.git aesthetic-predictor
+```
 ### 前置要求
 - Python 3.10+，系统已安装 `ffmpeg`
 - 写入 HF 的访问令牌：环境变量 `HF_TOKEN`
@@ -55,6 +63,7 @@ bash scripts/download_unimatch_weights.sh
 python -m pipeline.pipeline --config config.yaml
 # 仅处理前 N 个分片： --limit-shards N
 # 仅本地处理不上传： --skip-upload
+# 校准模式（采样分布，不上传，输出 calibration_meta.parquet）： --calibration --sample-size 10000
 ```
 
 ## 配置要点
@@ -63,9 +72,11 @@ python -m pipeline.pipeline --config config.yaml
 - `workdir`：工作目录，内部会创建 `downloads/`、`extract/`、`output/`、`state/`。
 - `shards`：待处理的压缩包文件名列表。
 - `splitter`：Base Pool 场景切分，默认 `pyscenedetect`，推荐 `threshold=27.0`，`min_scene_len=16`（约 0.5s）。
+- `splitter.cut`：是否物理切割视频。默认 false（保留原视频）；仍用 PySceneDetect 标出场景，并在元数据写入虚拟切片窗口（按 `window_len_frames`/`window_stride_frames`，示例 121/60 帧）。
 - `flash_filter`：闪烁过滤（迪厅灯光等），默认开启，可调节亮度跳变阈值与采样步长。
 - `models`：模型清单（如 `dover` / `laion_aes`）；`kind` 区分实现，`threshold` 用于筛选，`device` 绑定 GPU。可通过 `extra` 字段指定权重路径、采样策略等。
 - `upload`：HF 上传分块大小和并发。
+- `calibration`（可选）：`enabled`、`sample_size`、`output`、`quantiles` 用于采样评分并输出分布，帮助设定阈值；开启时默认不上传，可通过命令行 `--calibration`/`--sample-size`/`--calibration-output`/`--calibration-quantiles` 覆盖。
 
 ## 模型集成（Base Pool 已接入）
 - DOVER：读取 `DOVER` 仓库与 `dover.yml`，默认使用 `pretrained_weights/DOVER.pth`（不存在则自动从 HF `teowu/DOVER` 下载）。可通过 `config.yaml` 中模型的 `extra` 指定 `repo_path/config_path/weight_path/data_key/output=fused|technical|aesthetic`。
@@ -74,7 +85,7 @@ python -m pipeline.pipeline --config config.yaml
 - DummyScorer：连通性验证。
 - 扩展方式：在 `pipeline/models.py` 注册新 scorer（如 VMAF/光流/质量/美学）。
 - 多卡策略：在 `config.yaml` 为不同模型指定不同 `device`（如 `cuda:0,1`），避免频繁切换权重。
-- Base Pool 默认流程：PySceneDetect 切分 → Flash Filter → Dover/AES 评分 → 阈值筛选。
+- Base Pool 默认流程：PySceneDetect 切分 → Flash Filter → （可选）OCR 文字过滤 → Dover/AES/UniMatch 评分 → 阈值筛选。
 
 ## 模型与资源准备（发布/部署建议）
 - 如仓库未内置第三方源码，请在根目录拉取依赖：
@@ -88,8 +99,8 @@ python -m pipeline.pipeline --config config.yaml
 - 权重：
   - DOVER：默认自动从 HF `teowu/DOVER` 下载到 `DOVER/pretrained_weights/DOVER.pth`；可提前放好或使用 DOVER-Mobile 替代。
   - LAION-AES：线性头已包含在 `aesthetic-predictor/sa_0_4_vit_l_14_linear.pth`；open_clip 会自动下载主干权重。
-  - UniMatch（运动过滤，需权重）：手动下载到 `unimatch/pretrained/`（示例脚本 `scripts/download_unimatch_weights.sh` 会下载 `gmflow-scale1-mixdata-train320x576-4c3a6e9a.pth`）。在 `config.yaml` 的模型 `extra.weight_path` 指定路径。
-  - OCR（文字过滤，可选）：使用 PaddleOCR（已在 requirements），无需额外权重；在 `config.yaml` 设置 `ocr.enabled` 与占比阈值。
+- UniMatch（运动过滤，需权重）：手动下载到 `unimatch/pretrained/`（示例脚本 `scripts/download_unimatch_weights.sh` 会下载 `gmflow-scale1-mixdata-train320x576-4c3a6e9a.pth`）。在 `config.yaml` 的模型 `extra.weight_path` 指定路径。
+- OCR（文字过滤，可选）：使用 PaddleOCR（已在 requirements），需按平台安装 `paddlepaddle` 或 `paddlepaddle-gpu`（参考官方安装命令/版本）。配置 `ocr.enabled`、`text_area_threshold`、`sample_stride`、`lang`。
 - 不打包源码时：在 `config.yaml` 中通过 `repo_path/weight_path` 指向外部路径，并保证可访问对应仓库/权重：
   - DOVER 源码 `https://github.com/QualityAssessment/DOVER.git`
   - UniMatch 源码 `https://github.com/haofeixu/unimatch.git`
@@ -100,11 +111,15 @@ python -m pipeline.pipeline --config config.yaml
 - 多 GPU 时可在 `config.yaml` 为模型分配不同 `device`，避免权重频繁切换；如 DOVER `cuda:0`，AES `cuda:1`，UniMatch `cuda:2`。
 - 磁盘紧张时可开启 `splitter.remove_source_after_split` 删除原视频，仅保留切分片段；处理完分片会清理解压目录。
 - 先用 Dummy scorer 验证通路，再逐步启用 DOVER/AES/UniMatch 并调阈值、采样帧数和分辨率以平衡吞吐与质量。
+- 如需阈值校准，可开启 `--calibration --sample-size N`：抽样 N 个切分片段跑过滤，输出 `calibration_meta.parquet` 与分位数日志，帮助设定各模型阈值（quantiles 可在 config.calibration.quantiles 设置，默认 0.4/0.7）。
 
 ## 产出
 - 切分后的场景片段存放于 `extract/{shard}/scenes/`（处理完会在清理阶段删除，若开启 `remove_source_after_split=true` 会删除原视频）。
-- 保留片段硬链接/拷贝到 `workdir/output/{shard}/videos/`。
-- 元数据写入 `workdir/output/{shard}/metadata.jsonl`（路径、大小、模型得分、筛选结果、丢弃原因）。
+- 保留片段硬链接/拷贝到 `workdir/output/{shard}/videos/`（若 cut=false，则是原视频）。
+- 元数据写入 `workdir/output/{shard}/metadata.jsonl`，包含：
+  - `source_path`/`output_path`、文件大小
+  - `scores`、`keep`、`reason`（含 split_failed/flash/ocr_text/scoring_error/score_below_threshold 等）
+  - 场景与虚拟切片信息（当 cut=false 且 decord 可用）：`fps`、`total_frames`、`num_windows`、`windows`（帧范围列表）、`scenes`（场景起止帧及窗口数）
 - 上传时将整个 `output/{shard}` 目录作为子目录推送到目标 HF 数据集，支持断点重试。
 
 ## 打包与部署

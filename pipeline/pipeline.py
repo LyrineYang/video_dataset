@@ -4,16 +4,25 @@ import logging
 import shutil
 from pathlib import Path
 
+import pandas as pd
 from tqdm import tqdm
 
 from .config import Config, load_config, parse_args
+from .calibration import compute_quantiles, write_calibration_parquet
 from .filtering import materialize_results
 from .flash import is_flashy
 from .io import download_shard, extract_shard, list_video_files
 from .models import ScoreResult, build_scorers, run_scorers
-from .splitter import split_video_to_scenes
+from .ocr_filter import has_text
+from .splitter import detect_scenes, split_video_to_scenes
 from .state import load_state, save_state
 from .uploader import upload_shard
+try:
+    import decord
+except Exception as exc:  # noqa: BLE001
+    decord = None
+    log = logging.getLogger(__name__)
+    log.warning("Decord not available in pipeline: %s", exc)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,8 +39,14 @@ def ensure_dirs(cfg: Config) -> None:
     cfg.state_dir.mkdir(parents=True, exist_ok=True)
 
 
-def process_shard(cfg: Config, shard: str) -> None:
+def process_shard(cfg: Config, shard: str, calibration_remaining: int | None = None) -> int:
     state = load_state(cfg.state_dir, shard)
+    calibration_cfg = cfg.calibration or {}
+    calibration_enabled = calibration_cfg.get("enabled", False)
+    calibration_sample_size = int(calibration_cfg.get("sample_size", 10000))
+    calibration_output = calibration_cfg.get("output", None)
+    calibration_counter = 0
+    extras: dict[str, dict] = {}
 
     archive_path = cfg.downloads_dir / shard
     if not state["downloaded"]:
@@ -59,14 +74,20 @@ def process_shard(cfg: Config, shard: str) -> None:
     scenes_root = extract_path / "scenes"
     scene_clips: list[Path] = []
     split_failed: list[ScoreResult] = []
-    for video in tqdm(video_files, desc="Scene split", unit="video"):
+    for video in tqdm(video_files, desc="Scene detect", unit="video"):
         try:
-            clips = split_video_to_scenes(video, cfg.splitter, scenes_root)
-            scene_clips.extend(clips)
-            if cfg.splitter.remove_source_after_split:
-                video.unlink(missing_ok=True)
+            spans = detect_scenes(video, cfg.splitter)
+            if cfg.splitter.cut:
+                clips = cut_and_collect(video, spans, cfg, scenes_root)
+                scene_clips.extend(clips)
+                if cfg.splitter.remove_source_after_split:
+                    video.unlink(missing_ok=True)
+            else:
+                scene_clips.append(video)
+                # 记录场景与窗口信息
+                extras[str(video)] = build_scene_windows(video, spans, cfg)
         except Exception as exc:  # noqa: BLE001
-            log.warning("Scene split failed for %s: %s", video, exc)
+            log.warning("Scene detection failed for %s: %s", video, exc)
             split_failed.append(ScoreResult(path=video, scores={}, keep=False, reason="split_failed"))
 
     if not scene_clips:
@@ -107,23 +128,101 @@ def process_shard(cfg: Config, shard: str) -> None:
         metadata_path = materialize_results(shard, failed_result, cfg.output_dir)
         log.info("Metadata written to %s", metadata_path)
         return
+    # 若校准模式启用，截断样本数量
+    if calibration_enabled and calibration_sample_size > 0:
+        limit = calibration_sample_size
+        if calibration_remaining is not None:
+            limit = max(min(calibration_remaining, calibration_sample_size), 0)
+        if len(ocr_filtered) > limit:
+            ocr_filtered = ocr_filtered[:limit]
     log.info("Scoring %d clips with %d models", len(ocr_filtered), len(scorers))
     scored_results = run_scorers(scorers, ocr_filtered) if ocr_filtered else []
+    calibration_counter += len(ocr_filtered)
     results = split_failed + flash_dropped + ocr_dropped + scored_results
     state["scored"] = True
     save_state(cfg.state_dir, shard, state)
 
     log.info("Materializing results for %s", shard)
-    metadata_path = materialize_results(shard, results, cfg.output_dir)
+    metadata_path = materialize_results(shard, results, cfg.output_dir, extras=extras)
     log.info("Metadata written to %s", metadata_path)
 
-    if not cfg.skip_upload:
+    if calibration_enabled:
+        log.info("Calibration mode enabled; skipping upload")
+    elif not cfg.skip_upload:
         log.info("Uploading shard %s to %s", shard, cfg.target_repo)
         upload_shard(cfg.target_repo, shard, cfg.output_dir / shard, cfg.upload)
         state["uploaded"] = True
         save_state(cfg.state_dir, shard, state)
 
     cleanup_shard(cfg, shard)
+    return calibration_counter
+
+
+def cut_and_collect(video: Path, spans, cfg: Config, scenes_root: Path) -> list[Path]:
+    # 目前直接使用现有切分函数；spans 仅用于未来精细切分
+    clips = split_video_to_scenes(video, cfg.splitter, scenes_root)
+    return clips
+
+
+def build_scene_windows(video: Path, spans, cfg: Config) -> dict:
+    if decord is None:
+        return {}
+    try:
+        vr = decord.VideoReader(str(video))
+        total_frames = len(vr)
+        try:
+            fps = float(vr.get_avg_fps())
+        except Exception:
+            fps = None
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Failed to read video for window metadata %s: %s", video, exc)
+        return {}
+
+    if not fps or fps <= 0:
+        # 无法获取有效 fps 时，跳过窗口计算
+        return {}
+
+    if not spans:
+        # 若未检测到场景，视为一个全片场景
+        spans = [type("Span", (), {"start": 0.0, "end": total_frames / fps if fps else 0.0})()]
+
+    windows: list[list[int]] = []
+    scenes_meta: list[dict] = []
+    win_len = max(cfg.splitter.window_len_frames, 1)
+    stride = max(cfg.splitter.window_stride_frames, 1)
+
+    for span in spans:
+        if fps:
+            start_f = int(span.start * fps)
+            end_f = max(int(span.end * fps) - 1, start_f)
+        else:
+            start_f = 0
+            end_f = max(total_frames - 1, 0)
+
+        scene_windows: list[list[int]] = []
+        if end_f - start_f + 1 >= win_len:
+            s = start_f
+            while s + win_len - 1 <= end_f:
+                e = s + win_len - 1
+                scene_windows.append([s, e])
+                windows.append([s, e])
+                s += stride
+        scenes_meta.append(
+            {
+                "start_frame": start_f,
+                "end_frame": end_f,
+                "num_windows": len(scene_windows),
+                "windows": scene_windows,
+            }
+        )
+
+    return {
+        "fps": fps,
+        "total_frames": total_frames,
+        "num_windows": len(windows),
+        "windows": windows,
+        "scenes": scenes_meta,
+    }
 
 
 def cleanup_shard(cfg: Config, shard: str) -> None:
@@ -140,16 +239,72 @@ def cleanup_shard(cfg: Config, shard: str) -> None:
 def main() -> None:
     args = parse_args()
     cfg = load_config(Path(args.config), limit_shards=args.limit_shards, skip_upload=args.skip_upload)
+    # 解析校准 CLI 参数
+    if getattr(args, "calibration", False):
+        cfg.calibration = cfg.calibration or {}
+        cfg.calibration["enabled"] = True
+        cfg.skip_upload = True
+    calib_override = cfg.calibration or {}
+    if getattr(args, "sample_size", None) is not None:
+        calib_override["sample_size"] = int(args.sample_size)
+    if getattr(args, "calibration_output", None):
+        calib_override["output"] = args.calibration_output
+    if getattr(args, "calibration_quantiles", None):
+        try:
+            calib_override["quantiles"] = [float(x) for x in args.calibration_quantiles.split(",") if x]
+        except Exception:
+            log.warning("Failed to parse calibration_quantiles %s", args.calibration_quantiles)
+    cfg.calibration = calib_override
     ensure_dirs(cfg)
 
     log.info("Starting pipeline for %d shard(s)", len(cfg.shards))
+    total_calibrated = 0
     for shard in tqdm(cfg.shards, desc="Shards", unit="shard"):
         try:
-            process_shard(cfg, shard)
+            calib_cfg = cfg.calibration or {}
+            remaining = None
+            if calib_cfg.get("enabled", False) and calib_cfg.get("sample_size", 0) > 0:
+                remaining = max(int(calib_cfg["sample_size"]) - total_calibrated, 0)
+            added = process_shard(cfg, shard, calibration_remaining=remaining)
+            total_calibrated += added or 0
+            # 校准模式下达到样本上限则早停
+            calib = cfg.calibration or {}
+            if calib.get("enabled", False) and calib.get("sample_size", 0) > 0:
+                if total_calibrated >= int(calib["sample_size"]):
+                    log.info("Calibration sample size reached globally (%d); stopping", total_calibrated)
+                    break
         except Exception as exc:  # noqa: BLE001
             log.exception("Shard %s failed: %s", shard, exc)
             # 保留状态，用户可重试
             continue
+
+    # 如果是校准模式并指定输出与分位
+    calib_cfg = cfg.calibration or {}
+    if calib_cfg.get("enabled", False):
+        output_path = Path(calib_cfg.get("output", cfg.output_dir / "calibration_meta.parquet"))
+        # 汇总所有 metadata.jsonl 到一个 Parquet（这里简单读 output_dir 下所有 shard/metadata.jsonl）
+        rows = []
+        for meta_file in cfg.output_dir.rglob("metadata.jsonl"):
+            with meta_file.open("r", encoding="utf-8") as f:
+                for line in f:
+                    rows.append(line)
+        if rows:
+            # 写原始 jsonl 行到 parquet
+            df = pd.read_json("\n".join(rows), lines=True)
+            # 仅保留有 scores 的行以计算分位
+            df_scores = df[df["scores"].notna()]
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            df_scores.to_parquet(output_path, index=False)
+            log.info("Calibration parquet written to %s", output_path)
+            quantiles = calib_cfg.get("quantiles", [0.4, 0.7])
+            try:
+                if not df_scores.empty:
+                    qs = compute_quantiles(output_path, quantiles)
+                    log.info("Calibration quantiles: %s", qs)
+                else:
+                    log.warning("No scored entries for calibration quantiles")
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Failed to compute quantiles: %s", exc)
 
 
 if __name__ == "__main__":

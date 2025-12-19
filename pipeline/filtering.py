@@ -7,7 +7,7 @@ from typing import Iterable, List
 from .models import ScoreResult
 
 
-def materialize_results(shard: str, results: Iterable[ScoreResult], output_root: Path) -> Path:
+def materialize_results(shard: str, results: Iterable[ScoreResult], output_root: Path, extras: dict[str, dict] | None = None) -> Path:
     shard_out = output_root / shard
     videos_out = shard_out / "videos"
     shard_out.mkdir(parents=True, exist_ok=True)
@@ -17,6 +17,7 @@ def materialize_results(shard: str, results: Iterable[ScoreResult], output_root:
     with metadata_path.open("w", encoding="utf-8") as f:
         for res in results:
             target = videos_out / res.path.name if res.keep and res.path.exists() else None
+            extra = (extras or {}).get(str(res.path), {})
             record = {
                 "source_path": str(res.path),
                 "output_path": str(target) if target else None,
@@ -24,6 +25,7 @@ def materialize_results(shard: str, results: Iterable[ScoreResult], output_root:
                 "scores": res.scores,
                 "keep": res.keep,
                 "reason": res.reason,
+                **extra,
             }
             f.write(json.dumps(record) + "\n")
             if res.keep and res.path.exists() and target is not None:
