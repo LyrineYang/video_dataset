@@ -44,6 +44,7 @@ ocr:
   text_area_threshold: 0.01   # 文字面积占帧面积的比例阈值
   sample_stride: 10           # 每隔多少帧采样一次
   lang: ch                    # OCR 语言，常用 ch/en
+  use_gpu: false              # 如果已安装 paddlepaddle-gpu，可设为 true 利用 GPU
   record_only: false          # 若为 true，仅记录命中，不剔除
 
 models:

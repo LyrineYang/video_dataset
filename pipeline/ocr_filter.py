@@ -33,7 +33,7 @@ def has_text(video_path: Path, cfg: OCRConfig) -> bool:
         log.warning("OCR skipped for %s because PaddleOCR/decord not available", video_path)
         return False
 
-    ocr = _get_ocr(cfg.lang)
+    ocr = _get_ocr(cfg.lang, cfg.use_gpu)
     ocr_kwargs = _build_ocr_kwargs(ocr)
     vr = decord.VideoReader(str(video_path))
     total = len(vr)
@@ -50,18 +50,18 @@ def has_text(video_path: Path, cfg: OCRConfig) -> bool:
     return hit
 
 
-@lru_cache(maxsize=2)
-def _get_ocr(lang: str) -> PaddleOCR:  # type: ignore
+@lru_cache(maxsize=4)
+def _get_ocr(lang: str, use_gpu: bool = False) -> PaddleOCR:  # type: ignore
     try:
         # 新版本参数，显式关闭识别分支以节省开销
-        return PaddleOCR(use_angle_cls=False, lang=lang, det=True, rec=False)
+        return PaddleOCR(use_angle_cls=False, lang=lang, det=True, rec=False, use_gpu=use_gpu)
     except Exception:
         # 兼容老版本 PaddleOCR 不支持 rec 参数的情况
         try:
-            return PaddleOCR(use_angle_cls=False, lang=lang, det=True)
+            return PaddleOCR(use_angle_cls=False, lang=lang, det=True, use_gpu=use_gpu)
         except Exception:
             # 最简参数集，尽量兼容旧版
-            return PaddleOCR(use_angle_cls=False, lang=lang)
+            return PaddleOCR(use_angle_cls=False, lang=lang, use_gpu=use_gpu)
 
 
 def _build_ocr_kwargs(ocr: PaddleOCR) -> dict[str, object]:  # type: ignore

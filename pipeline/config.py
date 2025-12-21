@@ -49,6 +49,7 @@ class OCRConfig:
     text_area_threshold: float = 0.02
     sample_stride: int = 10
     lang: str = "ch"
+    use_gpu: bool = False
     record_only: bool = False  # 若为 True，则仅记录命中，不剔除
 
 
