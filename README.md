@@ -14,18 +14,22 @@
 - ffmpeg 已安装
 - 服务器双卡 A800（80GB），或等效 CUDA GPU
 
-### 依赖安装（GPU 服务器，CUDA 12.1 示例）
-1) 安装匹配硬件的 torch/torchvision  
-   `pip install torch==2.3.1+cu121 torchvision==0.18.1+cu121 --index-url https://download.pytorch.org/whl/cu121`
-2) 安装 Paddle（用于 OCR）  
-   `pip install paddlepaddle-gpu==2.6.1 -f https://www.paddlepaddle.org.cn/whl/cu121`
-3) 安装其余依赖：`pip install -r requirements.txt`
-4) 拉取外部源码（如仓库未自带）：  
-   ```bash
-   git clone https://github.com/QualityAssessment/DOVER.git DOVER
-   git clone https://github.com/autonomousvision/unimatch.git unimatch
-   git clone https://github.com/LAION-AI/aesthetic-predictor.git aesthetic-predictor
-   ```
+### 依赖安装（GPU 服务器，CUDA 12.1 示例，一次性命令块）
+```bash
+# 1) 安装匹配硬件的 torch/torchvision
+pip install torch==2.3.1+cu121 torchvision==0.18.1+cu121 --index-url https://download.pytorch.org/whl/cu121
+
+# 2) 安装 Paddle（用于 OCR）
+pip install paddlepaddle-gpu==2.6.1 -f https://www.paddlepaddle.org.cn/whl/cu121
+
+# 3) 安装其余依赖
+pip install -r requirements.txt
+
+# 4) 拉取外部源码（若仓库未自带）
+git clone https://github.com/QualityAssessment/DOVER.git DOVER
+git clone https://github.com/autonomousvision/unimatch.git unimatch
+git clone https://github.com/LAION-AI/aesthetic-predictor.git aesthetic-predictor
+```
 
 ## 配置说明（`config.yaml` 关键字段）
 示例详见 `config.example.yaml`。核心字段：
