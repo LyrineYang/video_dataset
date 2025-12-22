@@ -81,7 +81,7 @@ models:
   # DOVER 视频质量：fused 输出约在 0~1，分支分数接近 N(0,1)；阈值需结合校准分布调整
   - name: dover
     kind: dover
-    threshold: 0.3         # 示例阈值，建议通过校准分布确定
+    threshold: 0.57         # 基于 P50 左右的留存估计，可按实际校准调整
     device: cuda:0
     batch_size: 8
     # Dover 额外参数（可选）
@@ -93,7 +93,7 @@ models:
   # LAION-AES 美学评分：输出通常在 ~0~1 区间，阈值需结合校准分布调整
   - name: aes
     kind: laion_aes
-    threshold: 0.525
+    threshold: 5.0
     device: cuda:1
     batch_size: 32
     # AES 额外参数（可选）
@@ -104,7 +104,7 @@ models:
   # UniMatch 光流（运动过滤），用于剔除低运动/PPT
   - name: motion
     kind: unimatch_flow
-    threshold: 0.5          # 光流幅值均值阈值，需结合校准分布调整
+    threshold: 87.0          # 基于 P50 左右的留存估计，可按实际校准调整
     device: cuda:0
     batch_size: 1
     repo_path: ./unimatch

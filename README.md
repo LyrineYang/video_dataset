@@ -53,30 +53,49 @@ git clone https://github.com/LAION-AI/aesthetic-predictor.git aesthetic-predicto
 ```
 
 ## 配置说明（`config.yaml` 关键字段）
-示例详见 `config.example.yaml`。核心字段：
-- `source_repo` / `target_repo`：源/目标 HF 数据集
-- `workdir`：工作目录，内部创建 `downloads` / `extract` / `output` / `state`
-- `shards` / `shards_file`：分片列表；分片多时推荐 `shards_file` 指向一个文本文件（每行一个文件名）。可用 `python scripts/fetch_shards_list.py --repo ONE-Lab/HQ-video-data --output shards_ONE-Lab_HQ-video-data.txt` 自动生成。
-- `runtime`：并行与流式
-  - `stream_processing`: 是否边切分边打分（默认 true）
-  - `scoring_workers`: scorer 并行线程数，0=按模型数自动
-  - `queue_size`: 切分→打分队列长度
-- `splitter`：场景切分参数（阈值/最小场景长/是否物理切割等）
+示例详见 `config.example.yaml`，`config.test.yaml` 为最小跑通示例。
+
+### 下载/输入
+- `source_repo`：源 HF 数据集（dataset）。大规模时建议本地镜像或开启缓存。
+- `workdir`：工作目录，内部自动创建 `downloads` / `extract` / `output` / `state`。
+- `shards`：要处理的分片文件名列表。
+- `shards_file`（可选）：分片文件名列表路径（每行一个文件名）。分片多时优先使用，生成方式示例：`python scripts/fetch_shards_list.py --repo ONE-Lab/HQ-video-data --output shards_ONE-Lab_HQ-video-data.txt`。
+
+### 运行/切分/过滤
+- `runtime`：流式与并行
+  - `stream_processing` 是否边切分边打分（默认 true）
+  - `scoring_workers` scorer 并行线程数，0=按模型数自动
+  - `queue_size` 切分→打分队列长度
+- `splitter`：场景切分（阈值、最小场景长、是否物理切割、虚拟窗口长度/步长）
 - `flash_filter`：闪烁过滤（`brightness_delta`、`max_flash_ratio`、`sample_stride`、`record_only`）
 - `ocr`：文字过滤（`enabled`、`text_area_threshold`、`sample_stride`、`lang`、`use_gpu`、`record_only`）
-- `caption`：片段描述生成（默认走 OpenRouter+OpenAI 模型，支持视觉）
-  - 基本：`enabled`、`provider`（openrouter|api）、`api_url`、`api_key`/`api_key_header`
-  - 模型与提示：`model`（默认 gpt-4o）、`system_prompt`、`user_prompt`、`max_tokens`、`temperature`
-  - 并发与鲁棒性：`max_workers`、`timeout`、`retry`
-  - 输入/输出：`include_image`（自动抽帧并随请求发送）、`image_max_side`（最长边降采样）
-  - `provider=api` 时：`file_field`、`response_field`、`extra_fields`
-- `models`：评分模型列表（示例默认双卡 A800）
+
+### Caption（OpenRouter 默认）
+- 位置：`config.yaml` 的 `caption` 段。
+- 快速模板：`provider: openrouter`，`api_url: https://openrouter.ai/api/v1/chat/completions`，`model: gpt-4o`，`include_image: true`。
+- 鉴权：`api_key`（建议用环境变量 `OPENROUTER_API_KEY` 注入），`api_key_header`（默认 Authorization）。可选：`openrouter_referer`、`openrouter_title`。
+- 提示与输出：`system_prompt` / `user_prompt` 控制语气与格式；`max_tokens`、`temperature` 控制长度与多样性。
+- 并发与鲁棒：`max_workers` 控制同时请求数，`timeout` / `retry` 控制超时与重试。
+- 自建接口：将 `provider: api`，填写 `api_url`，`file_field`、`response_field`、`extra_fields` 对应文件上传式服务。
+
+### 模型打分
+- `models`：评分模型列表
   - DOVER 质量：`kind: dover`, `device: cuda:0`
   - LAION-AES 美学：`kind: laion_aes`, `device: cuda:1`
   - UniMatch 运动：`kind: unimatch_flow`, `device: cuda:0`
   - 可按机器调整 `device`、`batch_size`、`threshold`、`extra`（权重/采样）
-- `upload`：上传分块大小、并发、可选 720p 转码
-- `calibration`：校准模式（`enabled`、`sample_size`、`output`、`quantiles`）
+
+### 上传/输出
+- `upload`：HF 上传相关
+  - `target_repo`：目标 HF 数据集（dataset）
+  - `chunk_size_mb`：分块大小（MB）
+  - `max_workers`：并发线程数
+  - `resize_720p`：上传前是否转码 720p（占用更多时间但省流量）
+- 产出目录：`workdir/output/{shard}`，含 `videos/`（保留片段/转码片段）与 `metadata.jsonl`（scores、过滤记录、可选 caption）。
+
+### 校准
+- `calibration`：`enabled`、`sample_size`、`output`、`quantiles`。开启后仅落盘分布，不上传。
+- 默认阈值（当前配置）：目标视频级留存约 20%，基于 95 条带标注验证集取近 P50 阈值：`dover≈0.57`、`aes=5.0`、`motion≈87`。若需更高精度可提升阈值，留存不足则相应降低。
 
 ### Caption 配置（OpenRouter 示例）
 - 配置文件：根目录 `config.yaml`（可由 `config.example.yaml` 复制）中的 `caption` 段。
