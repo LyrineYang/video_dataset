@@ -1,0 +1,97 @@
+source_repo: ONE-Lab/HQ-video-data
+target_repo: your-org/filtered-hq-video
+workdir: /data/world_model
+
+# 若分片很多可通过 shards_file 指定，每行一个文件名；如存在，则覆盖 shards 列表
+shards_file: shards_ONE-Lab_HQ-video-data.txt
+
+# 待处理的压缩包文件名（若未使用 shards_file 时生效，示例保留）
+shards:
+  - HQ-video-data-00001.zip
+  - HQ-video-data-00002.zip
+
+runtime:
+  stream_processing: true
+  scoring_workers: 0
+  queue_size: 16
+
+splitter:
+  kind: pyscenedetect
+  threshold: 27.0
+  min_scene_len: 16
+  remove_source_after_split: false
+  cut: false
+  window_len_frames: 121
+  window_stride_frames: 60
+
+flash_filter:
+  enabled: true
+  brightness_delta: 60.0
+  max_flash_ratio: 0.2
+  sample_stride: 5
+  record_only: false
+
+calibration:
+  enabled: false
+  sample_size: 10000
+  output: calibration_meta.parquet
+  quantiles: [0.4, 0.7]
+
+ocr:
+  enabled: false
+  text_area_threshold: 0.01
+  sample_stride: 10
+  lang: ch
+  record_only: false
+
+models:
+  - name: sanity
+    kind: dummy
+    threshold: 0.0
+    device: cpu
+    batch_size: 8
+  - name: dover
+    kind: dover
+    threshold: 0.3
+    device: cuda:0
+    batch_size: 8
+    repo_path: ./DOVER
+    config_path: dover.yml
+    weight_path: pretrained_weights/DOVER.pth
+    data_key: val-l1080p
+    output: fused
+  - name: aes
+    kind: laion_aes
+    threshold: 0.525
+    device: cuda:1
+    batch_size: 32
+    clip_model: ViT-L-14
+    pretrained: openai
+    weight_path: aesthetic-predictor/sa_0_4_vit_l_14_linear.pth
+    num_frames: 8
+  - name: motion
+    kind: unimatch_flow
+    threshold: 0.5
+    device: cuda:0
+    batch_size: 1
+    repo_path: ./unimatch
+    weight_path: pretrained/gmflow-scale1-mixdata-train320x576-4c3a6e9a.pth
+    num_pairs: 3
+    resize: [320, 576]
+    padding_factor: 16
+    num_scales: 1
+    upsample_factor: 8
+    attn_splits_list: [2]
+    corr_radius_list: [-1]
+    prop_radius_list: [-1]
+    num_reg_refine: 1
+
+upload:
+  chunk_size_mb: 512
+  max_workers: 3
+  resize_720p: false
+
+ffmpeg:
+  audio_sample_rate: 16000
+  max_width: 480
+  max_height: 360

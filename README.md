@@ -6,6 +6,7 @@
 - 场景切分：PySceneDetect `AdaptiveDetector`
 - 闪烁过滤：亮度跳变检测
 - OCR 文字过滤：PaddleOCR（可选 GPU）
+- Caption 生成：可配置 API（或未来替换开源模型）为保留片段生成描述
 - 多模型打分：DOVER（质量）、LAION-AES（美学）、UniMatch（运动），支持多卡并行
 - 输出：保留片段/原视频、`metadata.jsonl`，可选上传到新 HF 数据集；校准模式输出分位数
 
@@ -55,7 +56,7 @@ git clone https://github.com/LAION-AI/aesthetic-predictor.git aesthetic-predicto
 示例详见 `config.example.yaml`。核心字段：
 - `source_repo` / `target_repo`：源/目标 HF 数据集
 - `workdir`：工作目录，内部创建 `downloads` / `extract` / `output` / `state`
-- `shards`：待处理的分片文件名列表
+- `shards` / `shards_file`：分片列表；分片多时推荐 `shards_file` 指向一个文本文件（每行一个文件名）。可用 `python scripts/fetch_shards_list.py --repo ONE-Lab/HQ-video-data --output shards_ONE-Lab_HQ-video-data.txt` 自动生成。
 - `runtime`：并行与流式
   - `stream_processing`: 是否边切分边打分（默认 true）
   - `scoring_workers`: scorer 并行线程数，0=按模型数自动
@@ -63,6 +64,12 @@ git clone https://github.com/LAION-AI/aesthetic-predictor.git aesthetic-predicto
 - `splitter`：场景切分参数（阈值/最小场景长/是否物理切割等）
 - `flash_filter`：闪烁过滤（`brightness_delta`、`max_flash_ratio`、`sample_stride`、`record_only`）
 - `ocr`：文字过滤（`enabled`、`text_area_threshold`、`sample_stride`、`lang`、`use_gpu`、`record_only`）
+- `caption`：片段描述生成（默认走 OpenRouter+OpenAI 模型，支持视觉）
+  - 基本：`enabled`、`provider`（openrouter|api）、`api_url`、`api_key`/`api_key_header`
+  - 模型与提示：`model`（默认 gpt-4o）、`system_prompt`、`user_prompt`、`max_tokens`、`temperature`
+  - 并发与鲁棒性：`max_workers`、`timeout`、`retry`
+  - 输入/输出：`include_image`（自动抽帧并随请求发送）、`image_max_side`（最长边降采样）
+  - `provider=api` 时：`file_field`、`response_field`、`extra_fields`
 - `models`：评分模型列表（示例默认双卡 A800）
   - DOVER 质量：`kind: dover`, `device: cuda:0`
   - LAION-AES 美学：`kind: laion_aes`, `device: cuda:1`
@@ -70,6 +77,13 @@ git clone https://github.com/LAION-AI/aesthetic-predictor.git aesthetic-predicto
   - 可按机器调整 `device`、`batch_size`、`threshold`、`extra`（权重/采样）
 - `upload`：上传分块大小、并发、可选 720p 转码
 - `calibration`：校准模式（`enabled`、`sample_size`、`output`、`quantiles`）
+
+### Caption 配置（OpenRouter 示例）
+- 配置文件：根目录 `config.yaml`（可由 `config.example.yaml` 复制）中的 `caption` 段。
+- 推荐设置：`provider: openrouter`、`api_url: https://openrouter.ai/api/v1/chat/completions`、`model: gpt-4o`、`include_image: true`。API Key 使用环境变量更安全：`export OPENROUTER_API_KEY=xxxxx`，并在配置中留空 `api_key` 或直接填入。
+- 提示词：`system_prompt`/`user_prompt` 默认用简洁中文描述，可按需求改写；`max_tokens`/`temperature` 控制长度与多样性。
+- 并发/鲁棒：`max_workers` 控制同时请求数量，`timeout`/`retry` 控制超时与重试。
+- 自建接口：若已有文件上传式 caption 服务，将 `provider` 设为 `api`，填充 `api_url`/`file_field`/`response_field`/`extra_fields`。
 
 ## 运行
 基础命令：
@@ -91,7 +105,7 @@ python -m pipeline.pipeline --config config.yaml
 
 ## 产出
 - 处理后片段或原视频：`workdir/output/{shard}/videos/`
-- 元数据：`workdir/output/{shard}/metadata.jsonl`
+- 元数据：`workdir/output/{shard}/metadata.jsonl`，包含 scores/过滤记录和可选 caption
 - 校准时输出 `calibration_meta.parquet` 并打印分位数
 
 ## 常见问题

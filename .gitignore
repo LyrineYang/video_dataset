@@ -1,0 +1,20 @@
+__pycache__/
+*.pyc
+*.pyo
+*.parquet
+.DS_Store
+
+# workspace state / outputs
+downloads/
+extract/
+output/
+state/
+tmp_test_workdir/
+
+# data / artifacts
+*.csv
+*.xlsx
+
+# caches
+.cache/
+

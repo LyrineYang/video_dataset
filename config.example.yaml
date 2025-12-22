@@ -2,6 +2,9 @@ source_repo: ONE-Lab/HQ-video-data
 target_repo: your-org/filtered-hq-video
 workdir: /data/world_model
 
+# shards_file 可选：若提供，则读取文件内的分片列表（每行一个文件名），覆盖下方 shards 列表
+shards_file: shards_ONE-Lab_HQ-video-data.txt
+
 # 待处理的压缩包文件名（示例），以 50GB 压缩包为粒度
 shards:
   - HQ-video-data-00001.zip
@@ -46,6 +49,27 @@ ocr:
   lang: ch                    # OCR 语言，常用 ch/en
   use_gpu: false              # 如果已安装 paddlepaddle-gpu，可设为 true 利用 GPU
   record_only: false          # 若为 true，仅记录命中，不剔除
+
+# Caption 生成（API 示例）
+caption:
+  enabled: false
+  provider: openrouter                    # openrouter (OpenAI 兼容) 或 api(自建文件上传)
+  api_url: https://openrouter.ai/api/v1/chat/completions
+  api_key: null                           # 从环境注入更安全，例如 OPENROUTER_API_KEY
+  api_key_header: Authorization
+  model: gpt-4o                            # 默认使用支持视觉的模型
+  system_prompt: 你是视频内容描述助手，用简洁中文总结视频。
+  user_prompt: 为这段视频生成一句中文描述（不超过30字）。如有多场景请概括主要内容。
+  max_tokens: 120
+  temperature: 0.2
+  timeout: 60
+  max_workers: 2                          # 同时请求数量
+  retry: 1                                # 失败重试次数
+  include_image: true                     # 尝试抽帧并附带给模型
+  image_max_side: 512
+  file_field: file                        # provider=api 时的上传字段名
+  response_field: caption                 # provider=api 时的响应字段
+  extra_fields: {}                        # provider=api 时的额外表单字段
 
 models:
   # 基线占位符，始终返回 1.0 用于快速连通性验证

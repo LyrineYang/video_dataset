@@ -54,6 +54,30 @@ class OCRConfig:
 
 
 @dataclass
+class CaptionConfig:
+    enabled: bool = False
+    provider: str = "api"  # api | openrouter（openai 兼容接口）
+    api_url: str | None = None
+    api_key: str | None = None
+    api_key_header: str = "Authorization"
+    model: str = "gpt-4o"  # 默认视觉多模态
+    system_prompt: str = "你是视频内容描述助手，用简洁中文总结视频。"
+    user_prompt: str = "为这段视频生成一句中文描述（不超过30字）。如有多场景请概括主要内容。"
+    max_tokens: int = 120
+    temperature: float = 0.2
+    timeout: float = 60.0
+    max_workers: int = 2
+    retry: int = 1
+    file_field: str = "file"
+    response_field: str = "caption"
+    extra_fields: Dict[str, Any] = field(default_factory=dict)
+    include_image: bool = True  # openrouter: 若可读取视频帧则附带图片
+    image_max_side: int = 512   # openrouter: 降采样最长边，降低 payload
+    openrouter_referer: str | None = None  # 可选：OpenRouter 推荐传递
+    openrouter_title: str | None = None
+
+
+@dataclass
 class RuntimeConfig:
     # 是否启用流水线流式处理（边切分/过滤边打分）
     stream_processing: bool = True
@@ -76,11 +100,13 @@ class Config:
     target_repo: str
     workdir: Path
     shards: List[str]
+    shards_file: Path | None
     models: List[ModelConfig]
     upload: UploadConfig
     splitter: SplitterConfig
     flash_filter: FlashFilterConfig
     ocr: OCRConfig
+    caption: CaptionConfig
     runtime: RuntimeConfig
     ffmpeg: FFmpegConfig
     calibration: dict[str, Any] = field(default_factory=dict)
@@ -151,6 +177,7 @@ def _load_yaml(path: Path) -> Dict[str, Any]:
 
 def load_config(path: Path, limit_shards: int | None = None, skip_upload: bool = False) -> Config:
     raw = _load_yaml(path)
+    base_dir = path.parent
 
     models = [
         ModelConfig(
@@ -164,16 +191,37 @@ def load_config(path: Path, limit_shards: int | None = None, skip_upload: bool =
         for m in raw.get("models", [])
     ]
 
+    shards_file = raw.get("shards_file")
+    sf_path: Path | None = None
+    shards: List[str] = []
+    if shards_file:
+        sf_path = Path(shards_file)
+        if not sf_path.is_absolute():
+            sf_path = base_dir / sf_path
+        if sf_path.exists():
+            with sf_path.open("r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    shards.append(line)
+        else:
+            raise FileNotFoundError(f"shards_file not found: {sf_path}")
+    else:
+        shards = list(raw.get("shards", []))
+
     cfg = Config(
         source_repo=raw["source_repo"],
         target_repo=raw["target_repo"],
         workdir=Path(raw["workdir"]),
-        shards=list(raw.get("shards", [])),
+        shards=shards,
+        shards_file=sf_path if sf_path else None,
         models=models,
         upload=UploadConfig(**raw.get("upload", {})),
         splitter=SplitterConfig(**raw.get("splitter", {})),
         flash_filter=FlashFilterConfig(**raw.get("flash_filter", {})),
         ocr=OCRConfig(**raw.get("ocr", {})),
+        caption=CaptionConfig(**raw.get("caption", {})),
         runtime=RuntimeConfig(**raw.get("runtime", {})),
         ffmpeg=FFmpegConfig(**raw.get("ffmpeg", {})),
         calibration=raw.get("calibration", {}),

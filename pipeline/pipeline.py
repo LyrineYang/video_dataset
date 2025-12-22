@@ -21,6 +21,7 @@ from .ocr_filter import has_text
 from .splitter import detect_scenes, split_video_to_scenes
 from .state import load_state, save_state
 from .uploader import upload_shard
+from .caption import generate_captions
 try:
     import decord
 except Exception as exc:  # noqa: BLE001
@@ -331,6 +332,18 @@ def process_shard(cfg: Config, shard: str, calibration_remaining: int | None = N
         summary["time_score"] = time.time() - t_score
         summary["clips_scored"] = len(ocr_filtered)
         results = split_failed + flash_dropped + ocr_dropped + scored_results
+
+    # Caption 生成仅针对保留的片段
+    if cfg.caption.enabled:
+        try:
+            kept_paths = [res.path for res in results if res.keep and res.path.exists()]
+            # 去重避免重复请求
+            unique_kept = list(dict.fromkeys(kept_paths))
+            caption_map = generate_captions(unique_kept, cfg.caption) if unique_kept else {}
+            for path_str, caption in caption_map.items():
+                extras.setdefault(path_str, {})["caption"] = caption
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Caption generation failed for shard %s: %s", shard, exc)
     state["scored"] = True
     save_state(cfg.state_dir, shard, state)
 
