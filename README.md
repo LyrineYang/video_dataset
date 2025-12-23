@@ -33,16 +33,20 @@ git clone https://github.com/autonomousvision/unimatch.git unimatch
 git clone https://github.com/LAION-AI/aesthetic-predictor.git aesthetic-predictor
 ```
 
-### conda 环境示例（GPU，CUDA 12.1）
+### conda 环境示例（GPU，CUDA 12.x，含 cuDNN）
 ```bash
-conda create -y -n world_model python=3.10
-conda activate world_model
+conda create -y -n video_dataset_jq python=3.10
+conda activate video_dataset_jq
 
-# Torch/vision CUDA 12.1
+# Torch/vision CUDA 12.1（按需换成你的 CUDA 对应的轮子）
 pip install torch==2.3.1+cu121 torchvision==0.18.1+cu121 --index-url https://download.pytorch.org/whl/cu121
 
-# Paddle GPU
+# 安装 cuDNN（匹配 CUDA 12.x），确保库路径在 LD_LIBRARY_PATH
+conda install -y -c conda-forge cudnn=8.9
+
+# Paddle GPU（CUDA 12.x 用 cu121 轮子）
 pip install paddlepaddle-gpu==2.6.1 -f https://www.paddlepaddle.org.cn/whl/cu121
+pip install paddleocr==2.7.0.3
 
 # 其余依赖
 pip install -r requirements.txt
