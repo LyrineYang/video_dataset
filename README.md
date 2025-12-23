@@ -5,7 +5,7 @@
 ## 功能概览
 - 场景切分：PySceneDetect `AdaptiveDetector`
 - 闪烁过滤：亮度跳变检测
-- OCR 文字过滤：PaddleOCR（可选 GPU）
+- OCR 文字过滤：RapidOCR（ONNXRuntime，默认 CPU，可选 GPU）
 - Caption 生成：可配置 API（或未来替换开源模型）为保留片段生成描述
 - 多模型打分：DOVER（质量）、LAION-AES（美学）、UniMatch（运动），支持多卡并行
 - 输出：保留片段/原视频、`metadata.jsonl`，可选上传到新 HF 数据集；校准模式输出分位数
@@ -16,46 +16,39 @@
 - ffmpeg 已安装
 - 服务器双卡 A800（80GB），或等效 CUDA GPU
 
-### 依赖安装（GPU 服务器，CUDA 12.1 示例，一次性命令块）
+### 依赖安装（GPU 服务器，CUDA 12.x，RapidOCR GPU，推荐）
 ```bash
-# 1) 安装匹配硬件的 torch/torchvision
+# 0) 创建/激活环境（示例名 yjq_video_data）
+conda create -y -n yjq_video_data python=3.10
+conda activate yjq_video_data
+
+# 1) 安装项目依赖，带约束文件锁定 numpy/opencv/huggingface_hub/rapidocr 版本
+pip install -r requirements.txt -c constraints.txt
+
+# 2) 安装匹配硬件的 torch/torchvision（cu121 轮子对 CUDA 12.x 驱动可用）
 pip install torch==2.3.1+cu121 torchvision==0.18.1+cu121 --index-url https://download.pytorch.org/whl/cu121
 
-# 2) 安装 Paddle（用于 OCR）
-pip install paddlepaddle-gpu==2.6.1 -f https://www.paddlepaddle.org.cn/whl/cu121
+# 3) RapidOCR GPU：安装与驱动匹配的 onnxruntime-gpu（CUDA 12.x 示例）
+pip install onnxruntime-gpu==1.17.1
+# rapidocr-onnxruntime 已在 requirements，若被 CPU 版覆盖，可重装：
+pip install rapidocr-onnxruntime==1.3.24 --no-deps
 
-# 3) 安装其余依赖
-pip install -r requirements.txt
+# 4) 安装本地模型源码以避免导入失败（推荐）
+pip install -e ./DOVER
+pip install -e ./unimatch
 
-# 4) 拉取外部源码（若仓库未自带）
-git clone https://github.com/QualityAssessment/DOVER.git DOVER
-git clone https://github.com/autonomousvision/unimatch.git unimatch
-git clone https://github.com/LAION-AI/aesthetic-predictor.git aesthetic-predictor
+# 5) 可选：清理旧 Paddle 以免干扰
+# pip uninstall -y paddleocr paddlepaddle paddlepaddle-gpu
+
+# 6) 验证 ONNXRuntime 是否可用 GPU
+python - <<'PY'
+import onnxruntime as ort
+print("providers:", ort.get_available_providers())
+PY
+# 如果包含 CUDAExecutionProvider，则 RapidOCR 可用 GPU。
 ```
 
-### conda 环境示例（GPU，CUDA 12.x，含 cuDNN）
-```bash
-conda create -y -n video_dataset_jq python=3.10
-conda activate video_dataset_jq
-
-# Torch/vision CUDA 12.1（按需换成你的 CUDA 对应的轮子）
-pip install torch==2.3.1+cu121 torchvision==0.18.1+cu121 --index-url https://download.pytorch.org/whl/cu121
-
-# 安装 cuDNN（匹配 CUDA 12.x），确保库路径在 LD_LIBRARY_PATH
-conda install -y -c conda-forge cudnn=8.9
-
-# Paddle GPU（CUDA 12.x 用 cu121 轮子）
-pip install paddlepaddle-gpu==2.6.1 -f https://www.paddlepaddle.org.cn/whl/cu121
-pip install paddleocr==2.7.0.3
-
-# 其余依赖
-pip install -r requirements.txt
-
-# 外部源码（如未自带）
-git clone https://github.com/QualityAssessment/DOVER.git DOVER
-git clone https://github.com/autonomousvision/unimatch.git unimatch
-git clone https://github.com/LAION-AI/aesthetic-predictor.git aesthetic-predictor
-```
+> CPU-only：同第 0/1 步，torch 可用 CPU 版，跳过 onnxruntime-gpu，保持 `ocr.use_gpu: false`。
 
 ## 运行
 基础命令：
@@ -130,7 +123,7 @@ python -m pipeline.pipeline --config config.yaml
 - 模型分配：DOVER/motion→`cuda:0`，AES→`cuda:1`（示例默认如此）
 - 保持流式模式开启，减少 GPU 空转；`queue_size` 视内存调整
 - `scoring_workers=0` 自动按模型数并行；如需限速可设为 1/2
-- OCR：已安装 GPU 版 Paddle 时设 `ocr.use_gpu: true`；若解码占用高，可增大 `ocr.sample_stride`
+- OCR：RapidOCR 默认走 CPU；如安装了 onnxruntime-gpu 且想用 GPU，可设 `ocr.use_gpu: true`。解码占用高时可增大 `ocr.sample_stride`。
 - 闪烁过滤：误杀多可提高 `brightness_delta` 或增大 `max_flash_ratio`；漏检则反向调整
 
 ## 产出
@@ -139,6 +132,6 @@ python -m pipeline.pipeline --config config.yaml
 - 校准时输出 `calibration_meta.parquet` 并打印分位数
 
 ## 常见问题
-- PaddleOCR 报 det/rec 参数：已兼容新旧版；若仍有问题，设置 `ocr.use_gpu`/`use_cpu` 对应安装版本
+- RapidOCR 加载失败：确认已安装 `rapidocr-onnxruntime`；若设置了 `ocr.use_gpu: true`，需额外安装匹配驱动的 `onnxruntime-gpu`，否则改为 `use_gpu: false`。
 - 模型找不到权重：检查 `extra.weight_path`，按示例放置或让脚本自动下载（DOVER）
 - GPU 利用率低：确认 `runtime.stream_processing=true`、`scoring_workers`>1、模型 `device` 分配合理

@@ -45,13 +45,13 @@ calibration:
   output: calibration_meta.parquet  # 分布输出路径
   quantiles: [0.4, 0.7]     # 计算的分位点
 
-# OCR 文字过滤（使用 PaddleOCR 检测文字占比，超过阈值丢弃）
+# OCR 文字过滤（使用 RapidOCR 检测文字占比，超过阈值丢弃）
 ocr:
   enabled: false
   text_area_threshold: 0.01   # 文字面积占帧面积的比例阈值
   sample_stride: 10           # 每隔多少帧采样一次
   lang: ch                    # OCR 语言，常用 ch/en
-  use_gpu: false              # 如果已安装 paddlepaddle-gpu，可设为 true 利用 GPU
+  use_gpu: false              # RapidOCR 默认 CPU；若已装 onnxruntime-gpu 可设为 true
   record_only: false          # 若为 true，仅记录命中，不剔除
 
 # Caption 生成（API 示例）

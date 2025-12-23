@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 import logging
 from functools import lru_cache
 from pathlib import Path
@@ -14,10 +13,10 @@ from .config import OCRConfig
 log = logging.getLogger(__name__)
 
 try:
-    from paddleocr import PaddleOCR  # type: ignore
+    from rapidocr_onnxruntime import RapidOCR  # type: ignore
 except Exception as exc:  # noqa: BLE001
-    PaddleOCR = None  # type: ignore
-    log.warning("PaddleOCR not available: %s", exc)
+    RapidOCR = None  # type: ignore
+    log.warning("RapidOCR not available: %s", exc)
 
 try:
     import decord
@@ -33,19 +32,18 @@ def has_text(video_path: Path, cfg: OCRConfig) -> bool:
     if not cfg.enabled:
         return False
     global _ocr_unavailable_warned, _ocr_init_warned
-    if PaddleOCR is None or decord is None:
+    if RapidOCR is None or decord is None:
         if not _ocr_unavailable_warned:
-            log.warning("OCR skipped because PaddleOCR/decord not available")
+            log.warning("OCR skipped because RapidOCR/decord not available")
             _ocr_unavailable_warned = True
         return False
     try:
-        ocr = _get_ocr(cfg.lang, cfg.use_gpu)
+        ocr = _get_ocr(cfg.use_gpu)
     except Exception as exc:  # noqa: BLE001
         if not _ocr_init_warned:
             log.warning("OCR init failed: %s; skipping OCR (further warnings suppressed)", exc)
             _ocr_init_warned = True
         return False
-    ocr_kwargs = _build_ocr_kwargs(ocr)
     vr = decord.VideoReader(str(video_path))
     total = len(vr)
     if total == 0:
@@ -55,79 +53,70 @@ def has_text(video_path: Path, cfg: OCRConfig) -> bool:
     hit = False
     for idx in range(0, total, stride):
         frame = vr[idx].asnumpy()  # RGB
-        if _text_area_ratio(frame, ocr, ocr_kwargs) >= cfg.text_area_threshold:
+        if _text_area_ratio(frame, ocr) >= cfg.text_area_threshold:
             hit = True
             break
     return hit
 
 
 @lru_cache(maxsize=4)
-def _get_ocr(lang: str, use_gpu: bool = False) -> PaddleOCR:  # type: ignore
-    """
-    兼容不同版本 PaddleOCR：仅传递构造函数支持的参数，避免 det/rec/use_gpu 报未知参数。
-    """
-    if PaddleOCR is None:  # 防御性分支
-        raise RuntimeError("PaddleOCR not available")
-
-    try:
-        init_params = inspect.signature(PaddleOCR.__init__).parameters
-    except Exception:
-        init_params = {}
-
-    kwargs = {"use_angle_cls": False, "lang": lang}
-    for key, val in (("det", True), ("rec", False), ("use_gpu", use_gpu)):
-        if key in init_params:
-            kwargs[key] = val
-
-    try:
-        return PaddleOCR(**kwargs)
-    except Exception as exc:
-        log.warning("PaddleOCR init failed with %s; retrying with minimal args: %s", kwargs, exc)
-        # 去掉可选参数再尝试
-        for k in ("det", "rec", "use_gpu"):
-            kwargs.pop(k, None)
-        return PaddleOCR(**kwargs)
+def _get_ocr(use_gpu: bool = False):  # -> RapidOCR
+    if RapidOCR is None:
+        raise RuntimeError("RapidOCR not available")
+    kwargs = {
+        "det_use_cuda": use_gpu,
+        "cls_use_cuda": False,
+        "rec_use_cuda": use_gpu,
+    }
+    return RapidOCR(**kwargs)
 
 
-def _build_ocr_kwargs(ocr: PaddleOCR) -> dict[str, object]:  # type: ignore
-    try:
-        params = inspect.signature(ocr.ocr).parameters  # type: ignore[attr-defined]
-    except (TypeError, ValueError):
-        return {"det": True, "rec": False, "cls": False}
-    kwargs: dict[str, object] = {}
-    for key, value in (("det", True), ("rec", False), ("cls", False)):
-        if key in params:
-            kwargs[key] = value
-    return kwargs
-
-
-def _text_area_ratio(frame_rgb: np.ndarray, ocr: PaddleOCR, ocr_kwargs: dict[str, object]) -> float:  # type: ignore
+def _text_area_ratio(frame_rgb: np.ndarray, ocr) -> float:
     h, w, _ = frame_rgb.shape
     if h == 0 or w == 0:
         return 0.0
     frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-    try:
-        result = ocr.ocr(frame_bgr, **ocr_kwargs)
-    except (TypeError, ValueError) as exc:
-        if isinstance(exc, TypeError) or "Unknown argument" in str(exc):
-            log.warning("OCR call rejected kwargs %s: %s; retrying without kwargs", ocr_kwargs, exc)
-            ocr_kwargs.clear()
-            result = ocr.ocr(frame_bgr)
-        else:
-            raise
-    # result: list per image -> we pass one image, so take first element
-    if not result or not isinstance(result, list):
-        return 0.0
-    boxes = result[0] if isinstance(result[0], list) else []
+    result = _run_ocr(frame_bgr, ocr)
+    boxes = _extract_boxes(result)
     total_area = h * w
     text_area = 0.0
     for item in boxes:
         if not item:
             continue
-        poly = item[0]
+        poly = item[0] if isinstance(item, (list, tuple)) else None
         area = _polygon_area(poly)
         text_area += max(area, 0.0)
     return float(text_area / total_area) if total_area > 0 else 0.0
+
+
+def _run_ocr(frame_bgr: np.ndarray, ocr) -> list:
+    """
+    Normalize OCR call across RapidOCR (callable) and Paddle-style objects (ocr method).
+    """
+    # RapidOCR: __call__ returns (result, elapse)
+    if callable(getattr(ocr, "__call__", None)) and not hasattr(ocr, "ocr"):
+        result, _ = ocr(frame_bgr)
+        return result if isinstance(result, list) else []
+    # Fallback to Paddle-style API if present
+    if hasattr(ocr, "ocr"):
+        try:
+            return ocr.ocr(frame_bgr, det=True, rec=False, cls=False)  # type: ignore[attr-defined]
+        except Exception:
+            return ocr.ocr(frame_bgr)  # type: ignore[attr-defined]
+    return []
+
+
+def _extract_boxes(result: list) -> list:
+    if not result:
+        return []
+    # RapidOCR: list of [poly, text, score]
+    first = result[0]
+    if isinstance(first, (list, tuple)) and len(first) >= 3 and isinstance(first[0], (list, tuple)):
+        return result
+    # Paddle style: list per image
+    if isinstance(first, list):
+        return first
+    return []
 
 
 def _polygon_area(points: List[List[float]]) -> float:
