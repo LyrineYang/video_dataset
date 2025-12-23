@@ -16,7 +16,7 @@
 - ffmpeg 已安装
 - 服务器双卡 A800（80GB），或等效 CUDA GPU
 
-### 依赖安装（GPU 服务器，CUDA 12.x，RapidOCR GPU，推荐）
+### 依赖安装（GPU 服务器，CUDA 12.x，OCR 默认 CPU）
 ```bash
 # 0) 创建/激活环境（示例名 yjq_video_data）
 conda create -y -n yjq_video_data python=3.10
@@ -28,10 +28,7 @@ pip install -r requirements.txt -c constraints.txt
 # 2) 安装匹配硬件的 torch/torchvision（cu121 轮子对 CUDA 12.x 驱动可用）
 pip install torch==2.3.1+cu121 torchvision==0.18.1+cu121 --index-url https://download.pytorch.org/whl/cu121
 
-# 3) RapidOCR GPU：安装与驱动匹配的 onnxruntime-gpu（CUDA 12.x 示例）
-pip install onnxruntime-gpu==1.17.1
-# rapidocr-onnxruntime 已在 requirements，若被 CPU 版覆盖，可重装：
-pip install rapidocr-onnxruntime==1.3.24 --no-deps
+# 3) OCR 默认走 CPU，无需安装 onnxruntime-gpu；config 中保持 ocr.use_gpu: false
 
 # 4) 安装本地模型源码以避免导入失败（推荐）
 pip install -e ./DOVER
@@ -40,20 +37,17 @@ pip install -e ./unimatch
 # 5) 可选：清理旧 Paddle 以免干扰
 # pip uninstall -y paddleocr paddlepaddle paddlepaddle-gpu
 
-# 6) 验证 ONNXRuntime 是否可用 GPU
-python - <<'PY'
-import onnxruntime as ort
-print("providers:", ort.get_available_providers())
-PY
-# 如果包含 CUDAExecutionProvider，则 RapidOCR 可用 GPU。
-
-# 如仓库未自带外部源码，可先 clone：
-# git clone https://github.com/QualityAssessment/DOVER.git DOVER
-# git clone https://github.com/autonomousvision/unimatch.git unimatch
-# git clone https://github.com/LAION-AI/aesthetic-predictor.git aesthetic-predictor
+git clone https://github.com/QualityAssessment/DOVER.git DOVER
+git clone https://github.com/autonomousvision/unimatch.git unimatch
+git clone https://github.com/LAION-AI/aesthetic-predictor.git aesthetic-predictor
 ```
 
-> CPU-only：同第 0/1 步，torch 可用 CPU 版，跳过 onnxruntime-gpu，保持 `ocr.use_gpu: false`。
+权重下载
+- DOVER：运行时自动通过 hf_hub_download 获取 `pretrained_weights/DOVER.pth`（也可手动放置同路径）。
+- UniMatch：手动执行 `bash scripts/download_unimatch_weights.sh`，下载到 `unimatch/pretrained/gmflow-scale1-mixdata-train320x576-4c3a6e9a.pth`，或在 config 用 `weight_path` 覆盖。
+- LAION AES：默认自动加载/下载 `aesthetic-predictor/sa_0_4_vit_l_14_linear.pth`，如需自定义可手动放置并在 config 覆盖。
+
+> 如必须 GPU OCR，自行安装与驱动匹配的 onnxruntime-gpu + 对应 CUDA 运行库，并将配置改为 `ocr.use_gpu: true`。
 
 ## 运行
 基础命令：
