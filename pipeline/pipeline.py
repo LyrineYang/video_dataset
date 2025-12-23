@@ -358,6 +358,17 @@ def process_shard(cfg: Config, shard: str, calibration_remaining: int | None = N
     )
     log.info("Metadata written to %s", metadata_path)
 
+    # 结束摘要：减少刷屏，提供关键计数
+    log.info(
+        "[%s] done: scenes=%d flash_pass=%d ocr_pass=%d scored=%d time=%.1fs",
+        shard,
+        summary.get("clips_after_scene", 0),
+        summary.get("clips_after_flash", 0),
+        summary.get("clips_after_ocr", 0),
+        summary.get("clips_scored", 0),
+        summary.get("time_total", 0.0),
+    )
+
     if calibration_enabled:
         log.info("Calibration mode enabled; skipping upload")
     elif not cfg.skip_upload:

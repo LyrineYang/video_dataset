@@ -25,17 +25,25 @@ except Exception as exc:  # noqa: BLE001
     decord = None
     log.warning("Decord not available for OCR: %s", exc)
 
+# 控制重复告警
+_ocr_unavailable_warned = False
+_ocr_init_warned = False
 
 def has_text(video_path: Path, cfg: OCRConfig) -> bool:
     if not cfg.enabled:
         return False
+    global _ocr_unavailable_warned, _ocr_init_warned
     if PaddleOCR is None or decord is None:
-        log.warning("OCR skipped for %s because PaddleOCR/decord not available", video_path)
+        if not _ocr_unavailable_warned:
+            log.warning("OCR skipped because PaddleOCR/decord not available")
+            _ocr_unavailable_warned = True
         return False
     try:
         ocr = _get_ocr(cfg.lang, cfg.use_gpu)
     except Exception as exc:  # noqa: BLE001
-        log.warning("OCR init failed for %s: %s; skipping OCR", video_path, exc)
+        if not _ocr_init_warned:
+            log.warning("OCR init failed: %s; skipping OCR (further warnings suppressed)", exc)
+            _ocr_init_warned = True
         return False
     ocr_kwargs = _build_ocr_kwargs(ocr)
     vr = decord.VideoReader(str(video_path))
