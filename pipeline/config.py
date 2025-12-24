@@ -33,6 +33,15 @@ class SplitterConfig:
     cut: bool = False  # 是否物理切割场景
     window_len_frames: int = 121  # 虚拟切片长度（帧）
     window_stride_frames: int = 60  # 虚拟切片步长（帧）
+    # TransNet/GPU 切分附加参数
+    device: str = "cuda:0"
+    transnet_threshold: float = 0.5  # shot boundary 概率阈值
+    chunk_size_frames: int = 4000  # 分块处理防 OOM
+    stride_frames: int = 1  # 抽帧步长（>1 可加速但精度下降）
+    batch_size: int = 32  # TransNet 推理批次
+    weight_path: str | None = None  # 本地权重路径（可相对）
+    hf_repo_id: str | None = None  # 可选：HF 仓库自动下载
+    hf_filename: str | None = None  # 可选：HF 文件名用于自动下载
 
 
 @dataclass

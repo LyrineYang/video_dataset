@@ -13,14 +13,19 @@ shards:
 runtime:
   stream_processing: true
   scoring_workers: 3
-  queue_size: 32
+  queue_size: 48
   prefetch_shards: 2
   download_workers: 2
 
 splitter:
-  kind: pyscenedetect
-  threshold: 27.0
-  min_scene_len: 16
+  kind: transnet
+  device: cuda:0
+  batch_size: 32
+  chunk_size_frames: 4000
+  stride_frames: 1
+  transnet_threshold: 0.5
+  threshold: 27.0          # 备用：pyscenedetect 模式下使用
+  min_scene_len: 16        # 备用：pyscenedetect 模式下使用
   remove_source_after_split: false
   cut: false
   window_len_frames: 121
@@ -57,7 +62,7 @@ models:
     kind: dover
     threshold: 0.57
     device: cuda:0
-    batch_size: 16
+    batch_size: 20
     repo_path: ./DOVER
     config_path: dover.yml
     weight_path: pretrained_weights/DOVER.pth
@@ -67,7 +72,7 @@ models:
     kind: laion_aes
     threshold: 5.0
     device: cuda:1
-    batch_size: 96
+    batch_size: 128
     clip_model: ViT-L-14
     pretrained: openai
     weight_path: aesthetic-predictor/sa_0_4_vit_l_14_linear.pth
@@ -76,7 +81,7 @@ models:
     kind: unimatch_flow
     threshold: 87.0
     device: cuda:1
-    batch_size: 8
+    batch_size: 12
     repo_path: ./unimatch
     weight_path: pretrained/gmflow-scale1-mixdata-train320x576-4c3a6e9a.pth
     num_pairs: 3
